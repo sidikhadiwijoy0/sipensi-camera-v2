@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kamera Presensi SIPENSI</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#0f172a;color:#f8fafc;font-family:Arial,sans-serif}.wrap{max-width:540px;margin:0 auto;padding:18px}.top{padding:12px 0 18px}.top h1{font-size:22px;margin:0 0 6px}.muted{color:#aab8cc;font-size:13px;line-height:1.5}.panel{background:#1e293b;border:1px solid #334155;border-radius:16px;padding:16px;margin:14px 0}.btn{width:100%;border:0;border-radius:10px;padding:14px;margin:6px 0;background:#2563eb;color:#fff;font-size:15px;font-weight:700}.btn.green{background:#059669}.btn.gray{background:#475569}.btn:disabled{opacity:.55}.status{padding:12px;border-radius:10px;background:#334155;font-size:13px;line-height:1.5;white-space:pre-wrap}.student{font-size:16px;font-weight:700}.tag{display:inline-block;padding:4px 8px;border-radius:20px;background:#0f766e;color:#ccfbf1;font-size:11px;margin-bottom:8px}#reader{width:100%;overflow:hidden;border-radius:12px}#reader video{border-radius:12px}video{width:100%;max-height:420px;object-fit:cover;border-radius:12px;background:#020617}#preview{width:100%;max-height:420px;object-fit:contain;border-radius:12px} .hidden{display:none!important}.success{background:#064e3b}.error{background:#7f1d1d}.actions{display:flex;gap:8px}.actions .btn{flex:1}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>Kamera Presensi SIPENSI</h1><div class="muted">Pindai QR siswa, ambil foto selfie, dan rekam titik GPS gerbang sekolah.</div></div>
+  <div class="panel"><div id="status" class="status">Menghubungkan dengan aplikasi SIPENSI...</div></div>
+  <div class="panel" id="scanPanel"><h3>1. Scan kartu QR siswa</h3><p class="muted">Gunakan kamera belakang. Arahkan ke QR yang tercetak pada kartu siswa.</p><div id="reader"></div><button id="scanBtn" class="btn" onclick="startQr()" disabled>Mulai scan QR</button><button class="btn gray" onclick="stopQr()">Hentikan kamera</button></div>
+  <div class="panel hidden" id="studentPanel"><span class="tag">QR SISWA VALID</span><div id="studentName" class="student"></div><div id="studentClass" class="muted"></div><p class="muted">Pastikan siswa yang berdiri di depan petugas sesuai dengan identitas yang tampil.</p><button class="btn green" id="selfieBtn" onclick="startSelfie()">2. Aktifkan selfie dan GPS</button></div>
+  <div class="panel hidden" id="selfiePanel"><h3>2. Foto selfie siswa</h3><p id="gpsStatus" class="muted">Menunggu lokasi GPS...</p><video id="selfieVideo" autoplay playsinline muted></video><img id="preview" class="hidden" alt="Pratinjau selfie"><canvas id="canvas" class="hidden"></canvas><button class="btn" id="captureBtn" onclick="captureSelfie()">Ambil foto selfie</button><button class="btn green hidden" id="submitBtn" onclick="submitEvidence()">3. Kirim presensi</button><button class="btn gray" onclick="retake()">Ulangi foto</button></div>
+  <div class="panel hidden" id="donePanel"><h2>Presensi tersimpan</h2><p id="doneText" class="muted"></p><button class="btn green" onclick="resetFlow()">Scan siswa berikutnya</button><button class="btn gray" onclick="window.close()">Tutup kamera</button></div>
+</div>
+<script>
+let parentOrigin='', nonce='', scanner=null, activeStudent=null, qrToken='', selfieStream=null, gps=null, photoData='';
+const $=id=>document.getElementById(id);
+function status(text,kind){$('status').textContent=text;$('status').className='status '+(kind||'');}
+function sendParent(payload){if(!window.opener||!parentOrigin){status('Koneksi ke aplikasi utama terputus. Tutup halaman ini dan buka kamera dari SIPENSI lagi.','error');return;}window.opener.postMessage(Object.assign({nonce:nonce},payload),parentOrigin);}
+window.addEventListener('message',event=>{
+  if(event.source!==window.opener)return;
+  if(event.data&&event.data.type==='SIPENSI_INIT'){
+    if(!/^https:\/\/(script\.google\.com|([a-z0-9-]+\.)*googleusercontent\.com)$/i.test(event.origin))return;
+    parentOrigin=event.origin;nonce=event.data.nonce||'';$('scanBtn').disabled=false;status('Terhubung. Tekan Mulai scan QR untuk membaca kartu siswa.','success');return;
+  }
+  if(event.origin!==parentOrigin||!event.data||event.data.nonce!==nonce)return;
+  const d=event.data;
+  if(d.type==='STUDENT_OK'){
+    activeStudent=d.student;qrToken=d.qrToken||qrToken;$('studentName').textContent=activeStudent.nama;$('studentClass').textContent='Nomor induk: '+activeStudent.no+' · '+activeStudent.kelas;$('studentPanel').classList.remove('hidden');$('scanPanel').classList.add('hidden');status('QR valid. Periksa nama siswa, kemudian aktifkan selfie dan GPS.','success');
+  }else if(d.type==='STUDENT_ERROR'){
+    status(d.message||'QR tidak valid. Silakan scan kembali.','error');$('scanBtn').disabled=false;
+  }else if(d.type==='ATTENDANCE_SAVED'){
+    stopSelfie();$('selfiePanel').classList.add('hidden');$('studentPanel').classList.add('hidden');$('donePanel').classList.remove('hidden');$('doneText').textContent=(d.result.student.nama||'Siswa')+' · '+d.result.time+' · '+d.result.status;status('Bukti selfie dan koordinat GPS berhasil tersimpan.','success');
+  }else if(d.type==='ATTENDANCE_FAILED'){
+    $('submitBtn').disabled=false;status(d.message||'Gagal menyimpan presensi.','error');
+  }
+});
+if(window.opener)window.opener.postMessage({type:'CAMERA_READY'},'*');else status('Halaman kamera harus dibuka dari tombol Buka kamera presensi di aplikasi SIPENSI.','error');
+
+async function startQr(){
+  if(!window.Html5Qrcode){status('Library QR tidak berhasil dimuat. Periksa koneksi internet lalu muat ulang halaman.','error');return;}
+  $('scanBtn').disabled=true;
+  try{
+    if(!scanner)scanner=new Html5Qrcode('reader');
+    await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:240,height:240},aspectRatio:1.0},async text=>{
+      qrToken=String(text||'').trim();if(!qrToken)return;
+      await stopQr();status('QR terbaca. Memeriksa ke database SIPENSI...');sendParent({type:'QR_SCANNED',qrToken:qrToken});
+    },()=>{});
+    status('Kamera belakang aktif. Arahkan QR ke dalam kotak scan.','success');
+  }catch(e){$('scanBtn').disabled=false;status('Gagal membuka kamera QR: '+(e&&e.message?e.message:String(e)),'error');}
+}
+async function stopQr(){if(scanner){try{if(scanner.isScanning)await scanner.stop();scanner.clear();}catch(e){}}}
+function getGps(){return new Promise((resolve,reject)=>{
+  if(!navigator.geolocation){reject(new Error('Browser ini tidak menyediakan GPS/geolocation.'));return;}
+  navigator.geolocation.getCurrentPosition(p=>resolve({latitude:p.coords.latitude,longitude:p.coords.longitude,accuracy:p.coords.accuracy}),e=>reject(new Error(({1:'Izin lokasi ditolak. Aktifkan izin lokasi browser.',2:'Lokasi tidak ditemukan. Coba di area terbuka.',3:'Waktu mencari lokasi habis. Coba lagi.'})[e.code]||e.message||'GPS gagal dibaca.')),{enableHighAccuracy:true,timeout:25000,maximumAge:0});
+});}
+async function startSelfie(){
+  $('selfieBtn').disabled=true;status('Meminta izin GPS dan kamera depan...');
+  try{
+    gps=await getGps();$('gpsStatus').textContent='Lokasi didapat. Akurasi sekitar '+Math.round(gps.accuracy)+' meter.';
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('Browser tidak mendukung akses kamera. Buka halaman ini melalui Chrome/Browser terbaru dan HTTPS.');
+    selfieStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'user'},width:{ideal:1280},height:{ideal:720}}});
+    $('selfieVideo').srcObject=selfieStream;await $('selfieVideo').play();$('studentPanel').classList.add('hidden');$('selfiePanel').classList.remove('hidden');status('Kamera selfie aktif. Posisikan wajah siswa dengan jelas, kemudian ambil foto.','success');
+  }catch(e){$('selfieBtn').disabled=false;status('Tidak dapat memulai selfie/GPS: '+(e.message||e),'error');}
+}
+function captureSelfie(){
+  const v=$('selfieVideo');if(!v.videoWidth){status('Kamera belum siap. Tunggu beberapa detik lalu coba lagi.','error');return;}
+  const maxW=960,scale=Math.min(1,maxW/v.videoWidth),c=$('canvas');c.width=Math.round(v.videoWidth*scale);c.height=Math.round(v.videoHeight*scale);c.getContext('2d').drawImage(v,0,0,c.width,c.height);photoData=c.toDataURL('image/jpeg',0.66);
+  $('preview').src=photoData;$('preview').classList.remove('hidden');v.classList.add('hidden');$('captureBtn').classList.add('hidden');$('submitBtn').classList.remove('hidden');status('Foto siap. Periksa foto sebelum mengirim presensi.','success');
+}
+function retake(){photoData='';$('preview').classList.add('hidden');$('selfieVideo').classList.remove('hidden');$('captureBtn').classList.remove('hidden');$('submitBtn').classList.add('hidden');}
+function submitEvidence(){if(!activeStudent||!qrToken||!photoData||!gps){status('Data belum lengkap: QR, foto, dan GPS harus tersedia.','error');return;}const btn=$('submitBtn');btn.disabled=true;status('Mengirim foto dan GPS ke database...');sendParent({type:'ATTENDANCE_DATA',payload:{qrToken:qrToken,selfieDataUrl:photoData,latitude:gps.latitude,longitude:gps.longitude,accuracy:gps.accuracy}});}
+function stopSelfie(){if(selfieStream){selfieStream.getTracks().forEach(t=>t.stop());selfieStream=null;}}
+async function resetFlow(){stopSelfie();await stopQr();activeStudent=null;qrToken='';gps=null;photoData='';$('donePanel').classList.add('hidden');$('studentPanel').classList.add('hidden');$('selfiePanel').classList.add('hidden');$('scanPanel').classList.remove('hidden');$('scanBtn').disabled=false;$('selfieBtn').disabled=false;$('submitBtn').disabled=false;$('preview').classList.add('hidden');$('selfieVideo').classList.remove('hidden');$('captureBtn').classList.remove('hidden');$('submitBtn').classList.add('hidden');$('reader').innerHTML='';scanner=null;status('Siap memindai QR siswa berikutnya.','success');}
+window.addEventListener('beforeunload',()=>{stopSelfie();stopQr();});
+</script>
+</body>
+</html>
